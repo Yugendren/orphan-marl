@@ -57,3 +57,11 @@ Thumbs.db
 # Logs
 *.log
 tensorboard_logs/
+
+# Security - EC2 Keys
+EC2_keys/
+EC2_keys/*
+*.pem
+*.key
+*_key
+*_keys
