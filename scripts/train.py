@@ -95,6 +95,7 @@ def main():
     
     # Create environment
     print("Creating environment...")
+    print("Using Isaac Gym")
     env = DroneTankTask(
         cfg=task_config,
         rl_device=device,
@@ -139,29 +140,34 @@ def main():
     print("Note: This is a simplified training script.")
     print("For full training, integrate with RL-Games or similar RL framework.")
     
-    # Placeholder training loop
+    # Training loop with CV support
     max_iterations = train_config.get("params", {}).get("trainer", {}).get("max_iterations", 10000)
     
     for iteration in range(max_iterations):
         # Get observations
-        obs = env.reset() if iteration == 0 else env.obs_buf
+        if iteration == 0:
+            obs = env.reset()
+        else:
+            obs = env.obs_buf if hasattr(env, 'obs_buf') else obs
         
-        # Select actions
-        # Note: In practice, you'd need to handle vision observations here
-        actions = agent.select_action(obs)
+        # Get vision observations if available
+        images = None
+        if hasattr(env, 'vision_buf') and env.vision_buf is not None:
+            images = env.vision_buf
+        
+        # Select actions (with CV)
+        actions = agent.select_action(obs.unsqueeze(0) if obs.dim() == 1 else obs, 
+                                     images=images)
         
         # Step environment
         env.pre_physics_step(actions)
         env.gym.simulate(env.sim)
         env.post_physics_step()
-        
-        # Get rewards
-        rewards = env.rew_buf
+        reward = env.rew_buf.mean().item() if hasattr(env, 'rew_buf') else 0.0
         
         # Logging
         if iteration % 100 == 0:
-            avg_reward = rewards.mean().item()
-            print(f"Iteration {iteration}: Average reward = {avg_reward:.4f}")
+            print(f"Iteration {iteration}: Reward = {reward:.4f}")
         
         # Save checkpoint
         if iteration % 500 == 0 and iteration > 0:

@@ -18,19 +18,19 @@ scene:
 
 # Drone settings
 drone:
-  usd_path: "assets/drone.usd"  # Path to drone USD asset
+  usd_path: "/home/ubuntu/isaac_assets/SM_Tank_T72b.usd"  # Your drone USD
   spawn:
-    translation: [0.0, 5.0, 0.0]  # Initial position
-    orientation: [0.0, 0.0, 0.0, 1.0]  # Initial orientation (quaternion)
+    translation: [0.0, 5.0, 0.0]
+    orientation: [0.0, 0.0, 0.0, 1.0]
   physics:
     mass: 1.0
     inertia: [0.1, 0.1, 0.1]
   sensors:
     camera:
-      enabled: true
+      enabled: true  # Enable CV
       resolution: [640, 480]
       fov: 60.0
-      position: [0.0, 0.0, 0.0]  # Relative to drone
+      position: [0.0, 0.0, 0.0]
       orientation: [0.0, 0.0, 0.0, 1.0]
 
 # Tank settings
@@ -67,4 +67,13 @@ episode:
   max_length: 1000  # Maximum steps per episode
   reset_on_crash: true
   reset_on_success: true
+
+# Reward settings
+reward:
+  tank_hit: 10.0
+  ground_crash: -5.0
+  distance_scale: 0.1
+  survival: 0.01
+  tank_contact_threshold: 0.5
+  ground_contact_threshold: 0.3
 
