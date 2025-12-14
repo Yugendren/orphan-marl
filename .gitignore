@@ -1,55 +1,59 @@
-# Prerequisites
-*.d
-
-# Object files
-*.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 *.so
-*.so.*
-*.dylib
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
 
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# debug information files
-*.dwo
+# Outputs
+outputs/
+checkpoints/
+logs/
+*.pt
+*.pth
+*.ckpt
+
+# Isaac Sim/Lab
+*.usd
+*.usda
+*.usdc
+*.usdz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+tensorboard_logs/

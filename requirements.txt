@@ -1,0 +1,25 @@
+# Core dependencies for Isaac Sim/Lab RL
+torch>=1.12.0
+numpy>=1.21.0
+gym>=0.21.0
+
+# Isaac Gym/Sim dependencies
+# Note: Isaac Sim/Lab should be installed separately
+# isaacgym>=1.0.0
+# isaacgymenvs>=1.0.0
+
+# Vision processing
+torchvision>=0.13.0
+Pillow>=9.0.0
+
+# Configuration
+PyYAML>=6.0
+
+# Utilities
+tqdm>=4.64.0
+tensorboard>=2.10.0
+
+# Optional: RL frameworks
+# rl-games>=1.5.0  # Uncomment if using RL-Games
+# stable-baselines3>=1.6.0  # Alternative RL framework
+

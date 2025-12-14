@@ -1,0 +1,72 @@
+# PPO Training Configuration for Drone Tank Task
+
+# Experiment name
+params:
+  config:
+    name: "DroneTankPPO"
+    seed: 42
+    
+  # Environment
+  env:
+    task: "DroneTankTask"
+    num_envs: 4096  # Number of parallel environments
+    num_actors: 4096
+    
+  # PPO Algorithm
+  algo:
+    name: "PPO"
+    ppo:
+      value_loss_coef: 0.5
+      entropy_coef: 0.01
+      gamma: 0.99
+      tau: 0.95
+      learning_rate: 3.0e-4
+      num_learning_epochs: 5
+      num_mini_batches: 4
+      clip_param: 0.2
+      max_grad_norm: 1.0
+      
+  # Network architecture
+  model:
+    name: "ContinuousActorCritic"
+    space:
+      continuous:
+        mu_activation: "None"
+        sigma_activation: "None"
+        mu_init:
+          name: "default"
+        sigma_init:
+          name: "const_initializer"
+          val: 0.0
+        fixed_sigma: false
+    mlp:
+      units: [512, 512, 256]
+      activation: "elu"
+      initializer:
+        name: "default"
+      regularizer:
+        name: "None"
+        
+  # Vision encoder (for camera observations)
+  vision:
+    encoder:
+      type: "cnn"
+      layers: [32, 64, 128, 256]
+      kernel_sizes: [8, 4, 3, 3]
+      strides: [4, 2, 1, 1]
+      activation: "relu"
+      
+  # Training
+  trainer:
+    max_iterations: 10000
+    save_best_after: 100
+    save_interval: 500
+    log_interval: 10
+    
+  # Checkpointing
+  checkpoint:
+    checkpoint: true
+    checkpoint_interval: 500
+    load_checkpoint: false
+    load_path: ""
+
