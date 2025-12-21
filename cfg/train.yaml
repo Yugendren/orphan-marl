@@ -1,0 +1,41 @@
+# OmniDrones Training Configuration
+# Usage: python train_omnidrones.py headless=true task=DroneToTarget
+
+headless: true
+
+# Simulation settings
+sim:
+  dt: 0.01
+  substeps: 2
+  device: cuda:0
+
+# Environment settings
+env:
+  num_envs: 1024  # GPU-parallelized environments
+
+# Training settings
+total_frames: 50_000_000
+max_iters: -1
+eval_interval: 100
+save_interval: 500
+seed: 42
+
+# Rendering for evaluation
+viewer:
+  resolution: [960, 720]
+  eye: [8, 0., 6.]
+  lookat: [0., 0., 1.]
+
+# WandB logging (set mode to 'online' when ready)
+wandb:
+  entity: ${oc.env:WANDB_ENTITY,your-username}
+  project: drone_rl
+  mode: disabled
+  group: ${oc.select:task.name}
+  run_name: ${oc.select:task.name,test}-${oc.select:algo.name,none}
+  job_type: train
+
+defaults:
+  - task: DroneToTarget
+  - algo: ppo
+  - _self_

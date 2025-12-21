@@ -1,96 +1,128 @@
-# Drone RL Training Script (`train_drone_ppo.py`)
+# OmniDrones Drone RL Training
 
-## Description
-This script implements Reinforcement Learning (RL) training for a quadrotor drone using Proximal Policy Optimization (PPO). It runs within the **NVIDIA Isaac Sim** environment using the **Pegasus Simulator** extension.
+GPU-parallelized reinforcement learning for drone navigation using [OmniDrones](https://github.com/btx0424/OmniDrones) on NVIDIA Isaac Sim.
 
-The drone's objective is to navigate to a target position (visualized as a red cube) in 3D space.
+## Features
+- **GPU-parallelized**: 1000s of environments running simultaneously
+- **PPO training**: Built-in PPO/MAPPO with TorchRL
+- **Custom task**: DroneToTarget navigation with reward shaping
+- **Hydra config**: Flexible configuration management
+- **WandB logging**: Experiment tracking and video recording
 
-## Dependencies
-- Python 3.10 (Isaac Sim python)
-- NVIDIA Isaac Sim
-- Pegasus Simulator Extension
-- [Stable Baselines3](https://stable-baselines3.readthedocs.io/)
-- Gymnasium
+## Requirements
+- Ubuntu 20.04/22.04 (Windows not supported)
+- NVIDIA GPU (RTX 2080+ recommended)
+- Isaac Sim 4.1.0
+- Isaac Lab
+
+## Installation
+
+```bash
+# Set Isaac Sim path
+export ISAACSIM_PATH="${HOME}/.local/share/ov/pkg/isaac-sim-4.1.0"
+
+# Run setup script
+chmod +x setup_omnidrones.sh
+./setup_omnidrones.sh
+```
 
 ## Usage
 
-### Training
-Run the training loop. By default, the script runs in **training mode** (`--mode train`), so you only need to specify other parameters like timesteps.
-
-**Standard Training (State-based observations):**
+### Quick Test with Built-in Hover Task
 ```bash
-# Basic training (default: 100k steps)
-$ISAACSIM_PYTHON train_drone_ppo.py
-
-# Train for specific number of timesteps
-$ISAACSIM_PYTHON train_drone_ppo.py --timesteps 100000
-
-# Train with GUI enabled (to see the drone)
-$ISAACSIM_PYTHON train_drone_ppo.py --gui
+cd OmniDrones/scripts
+python train.py task=Hover algo=ppo headless=true total_frames=1000 wandb.mode=disabled
 ```
 
-**Vision-based Training:**
-To train using camera input (160x120 RGB images):
+### Train Custom DroneToTarget Task
 ```bash
-$ISAACSIM_PYTHON train_drone_ppo.py --vision --timesteps 100000
+python train_omnidrones.py headless=true task=DroneToTarget
 ```
 
-> [!IMPORTANT]
-> **Headless Vision Training**:
-> Training with vision (`--vision`) requires a comprehensive rendering context (OpenGL/Vulkan). In headless environments (like Docker or remote servers), the script will crash if no display is found.
->
-> To fix this, you must either:
-> 1. Run with `--gui` if you have a display.
-> 2. Use **Xvfb** (Virtual Framebuffer) to provide a fake display:
->    ```bash
->    # Install Xvfb if needed
->    # sudo apt-get install xvfb
->
->    xvfb-run -a $ISAACSIM_PYTHON train_drone_ppo.py --vision
->    ```
-
-### Testing
-Evaluate a trained model.
-
+### With Evaluation and Checkpointing
 ```bash
-$ISAACSIM_PYTHON train_drone_ppo.py --mode test --model-path ./drone_ppo_models/drone_ppo_final.zip
+python train_omnidrones.py headless=true eval_interval=100 save_interval=500
 ```
 
-## Command Line Arguments
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--mode` | str | `train` | Mode to run: `train` or `test`. Optional for training. |
-| `--vision`| flag | `False` | Application of Vision-based observations (160x120 RGB). If omitted, uses State-based. |
-| `--timesteps`| int | `100_000` | Total number of training timesteps. |
-| `--model-path`| str | `None` | Path to a `.zip` model file. Required when mode is `test`. |
-| `--gui` | flag | `False` | Run with the simulator GUI window open (disables headless mode). |
+### Enable WandB Logging
+```bash
+python train_omnidrones.py wandb.mode=online wandb.entity=YOUR_USERNAME
+```
 
-## Environment Details
+## Configuration
 
-### Observation Space
-1. **State-based (Default)**: A 9-dimensional vector containing:
-   - Drone Position `[x, y, z]`
-   - Drone Linear Velocity `[vx, vy, vz]`
-   - Relative Target Position `[tx-x, ty-y, tz-z]`
+Configurations are managed with Hydra:
 
-2. **Vision-based**:
-   - Shape: `(120, 160, 3)`
-   - Type: RGB Image representing the drone's front-facing camera view.
+| File | Description |
+|------|-------------|
+| `cfg/train.yaml` | Main training config |
+| `cfg/algo/ppo.yaml` | PPO hyperparameters |
+| `cfg/task/DroneToTarget.yaml` | Task-specific settings |
 
-### Action Space
-Continuous control vector of size 4:
-- `[vx, vy, vz, yaw_rate]`
-- Range: `vx, vy` in [-2, 2], `vz, yaw_rate` in [-1, 1].
-- These are velocity commands sent to a lower-level velocity controller.
+### Override Config from Command Line
+```bash
+python train_omnidrones.py task.env.num_envs=2048 algo.ppo_epochs=8
+```
 
-### Reward Function
-The agent receives rewards based on:
-- **Distance**: Negative Euclidean distance to the target (closer is better).
-- **Success**: `+100` bonus for reaching within 0.5m of the target.
-- **Crash**: `-50` penalty for hitting the ground (z < 0.1).
-- **Out of Bounds**: `-50` penalty for moving too far (> 15m) from target.
+## Task: DroneToTarget
 
-## Output
-- **Logs**: TensorBoard logs are saved to `./drone_ppo_models/logs`.
-- **Checkpoints**: Models are saved every 10,000 steps to `./drone_ppo_models/`.
-- **Final Model**: Saved as `drone_ppo_final.zip` upon completion.
+Navigate a drone to randomly placed targets.
+
+**Observation Space (13D):**
+- Drone position [3]
+- Linear velocity [3]
+- Angular velocity [3]
+- Relative target [3]
+- Distance [1]
+
+**Action Space (3D):**
+- Velocity commands [vx, vy, vz]
+
+**Reward:**
+- Distance penalty: `-1.0 * distance`
+- Progress reward: `+20.0 * (prev_distance - distance)`
+- Success bonus: `+100.0`
+- Crash penalty: `-50.0`
+
+## Project Structure
+
+```
+├── cfg/
+│   ├── train.yaml           # Main config
+│   ├── algo/
+│   │   └── ppo.yaml          # PPO config
+│   └── task/
+│       └── DroneToTarget.yaml # Task config
+├── omni_drones/
+│   └── tasks/
+│       └── drone_to_target.py # Custom task
+├── train_omnidrones.py       # Training script
+├── setup_omnidrones.sh       # Installation script
+└── README.md
+```
+
+## Troubleshooting
+
+**ISAACSIM_PATH not set:**
+```bash
+export ISAACSIM_PATH="${HOME}/.local/share/ov/pkg/isaac-sim-4.1.0"
+```
+
+**Task not found:**
+Ensure custom task is registered by importing:
+```python
+from omni_drones.tasks import DroneToTargetTask
+```
+
+## Citation
+
+If you use this code, please cite OmniDrones:
+```bibtex
+@misc{xu2023omnidrones,
+    title={OmniDrones: An Efficient and Flexible Platform for Reinforcement Learning in Drone Control},
+    author={Botian Xu and Feng Gao and Chao Yu and Ruize Zhang and Yi Wu and Yu Wang},
+    year={2023},
+    eprint={2309.12825},
+    archivePrefix={arXiv}
+}
+```

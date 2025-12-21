@@ -1,0 +1,48 @@
+# DroneToTarget Task Configuration
+# Navigate drone to randomly placed target position
+
+name: DroneToTarget
+
+# Simulation physics
+sim:
+  dt: 0.01
+  substeps: 2
+  device: cuda:0
+
+# Environment settings
+env:
+  num_envs: 1024
+  max_episode_length: 500
+  use_vision: false  # Set true for camera-based observations
+
+# Drone configuration
+drone:
+  model: Iris
+  spawn_pos: [0.0, 0.0, 1.5]
+  mass: 1.5
+
+# Target configuration
+target:
+  distance_threshold: 0.5  # Success radius
+  max_distance: 10.0       # Max spawn distance
+  height_range: [1.0, 3.0] # Target height range
+  randomize: true
+
+# Observation space settings
+obs:
+  include_velocity: true
+  include_angular_velocity: true
+  include_relative_target: true
+
+# Action space: velocity commands [vx, vy, vz, yaw_rate]
+action:
+  max_velocity: [2.0, 2.0, 1.0]
+  max_yaw_rate: 1.0
+
+# Reward shaping
+reward:
+  distance_scale: -1.0      # Penalty per meter from target
+  success_bonus: 100.0      # Bonus for reaching target
+  crash_penalty: -50.0      # Penalty for crashing
+  progress_scale: 20.0      # Reward for getting closer
+  alive_bonus: 0.1          # Small bonus per step alive
