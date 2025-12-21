@@ -1,5 +1,5 @@
 # DroneToTarget Task Configuration
-# Navigate drone to randomly placed target position
+# Navigate drone to a tank target - drone spawns on circle around tank, always facing it
 
 name: DroneToTarget
 
@@ -17,16 +17,27 @@ env:
 
 # Drone configuration
 drone:
-  model: Iris
-  spawn_pos: [0.0, 0.0, 1.5]
-  mass: 1.5
+  model: Iris  # Uses OmniDrones built-in Iris quadrotor
+  spawn_height: 3.0  # Height above ground
 
-# Target configuration
+# Target (Tank) configuration
 target:
-  distance_threshold: 0.5  # Success radius
-  max_distance: 10.0       # Max spawn distance
-  height_range: [1.0, 3.0] # Target height range
-  randomize: true
+  # Path to tank USD file (relative to project or absolute)
+  usd_path: "scenes/training_scene_simple.usd"
+  # Tank prim path within the USD file
+  prim_path: "/World/SM_Tank_T72b"
+  # Tank position (center of spawn circle)
+  position: [0.0, 0.0, 0.0]
+  
+# Circular spawn configuration
+spawn:
+  # Drone spawns on circle around tank
+  radius_min: 8.0      # Minimum spawn radius (meters)
+  radius_max: 15.0     # Maximum spawn radius (meters)
+  height_min: 2.0      # Minimum spawn height
+  height_max: 5.0      # Maximum spawn height
+  # Drone always faces tank (camera pointing at target)
+  face_target: true
 
 # Observation space settings
 obs:
@@ -46,3 +57,4 @@ reward:
   crash_penalty: -50.0      # Penalty for crashing
   progress_scale: 20.0      # Reward for getting closer
   alive_bonus: 0.1          # Small bonus per step alive
+  facing_bonus: 0.5         # Bonus for keeping tank in view

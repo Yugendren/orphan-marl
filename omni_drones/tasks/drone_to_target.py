@@ -1,7 +1,14 @@
 """
 DroneToTarget Task for OmniDrones
 
-A custom RL task where a quadrotor drone must navigate to a randomly placed target position.
+Navigate a drone to a tank target. The drone spawns randomly on a circle 
+around the tank, always facing it (camera pointed at target).
+
+Spawn Logic:
+    - Random angle θ on circle around tank
+    - Random radius within [radius_min, radius_max]
+    - Random height within [height_min, height_max]
+    - Drone orientation: yaw = atan2(tank_y - drone_y, tank_x - drone_x)
 
 Observation Space:
     - Drone position [3]
@@ -12,41 +19,151 @@ Observation Space:
     Total: 13-dimensional state vector
 
 Action Space:
-    - Velocity commands [vx, vy, vz] or motor commands depending on config
+    - Velocity commands [vx, vy, vz] in drone body frame
 
 Reward:
     - Distance-based penalty
     - Progress reward for getting closer
     - Success bonus for reaching target
     - Crash penalty
-
-Episode Termination:
-    - Drone reaches target (success)
-    - Drone crashes (ground collision)
-    - Max steps reached (truncation)
+    - Facing bonus for keeping target in camera view
 """
 
+import math
 import torch
 import numpy as np
-from typing import Dict, Optional
-
-from omni_drones.envs.isaac_env import IsaacEnv
-from omni_drones.robots.drone import MultirotorBase
-from omni_drones.views import ArticulationView
+from typing import Dict, Optional, Tuple
 
 from tensordict import TensorDict
 from torchrl.data import CompositeSpec, UnboundedContinuousTensorSpec, BoundedTensorSpec
 
-# Register this task with OmniDrones
-from omni_drones.envs import register_env
+# OmniDrones imports - these will be available after OmniDrones is installed
+try:
+    from omni_drones.envs.isaac_env import IsaacEnv
+    from omni_drones.robots.drone import MultirotorBase
+    from omni_drones.envs import register_env
+    OMNIDRONES_AVAILABLE = True
+except ImportError:
+    OMNIDRONES_AVAILABLE = False
+    print("[WARNING] OmniDrones not installed. Install with: pip install -e OmniDrones/")
+    
+    # Placeholder for development
+    class IsaacEnv:
+        REGISTRY = {}
+    def register_env(name):
+        def decorator(cls):
+            return cls
+        return decorator
+
+
+def compute_circular_spawn_position(
+    n_envs: int,
+    target_position: torch.Tensor,
+    radius_min: float,
+    radius_max: float,
+    height_min: float,
+    height_max: float,
+    device: str
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute spawn positions on a circle around the target.
+    
+    Args:
+        n_envs: Number of environments
+        target_position: Target (tank) position [3]
+        radius_min: Minimum spawn radius
+        radius_max: Maximum spawn radius
+        height_min: Minimum spawn height
+        height_max: Maximum spawn height
+        device: Torch device
+        
+    Returns:
+        positions: Spawn positions [n_envs, 3]
+        yaw_angles: Yaw angles to face target [n_envs]
+    
+    Diagram (top view):
+    
+                    N (y+)
+                      |
+                      |
+        W -------- [TANK] -------- E (x+)
+                      |
+                      |
+                    S
+        
+        Drone spawns at random angle θ:
+        
+                   D2 (θ=90°)
+                  /
+                 /  radius
+                /
+        [TANK] -------- D1 (θ=0°)
+                \\
+                 \\
+                  D3 (θ=270°)
+        
+        Each drone faces the tank (yaw = θ + 180°)
+    """
+    # Random angle for each environment (0 to 2π)
+    theta = torch.rand(n_envs, device=device) * 2 * math.pi
+    
+    # Random radius within range
+    radius = torch.rand(n_envs, device=device) * (radius_max - radius_min) + radius_min
+    
+    # Random height within range
+    height = torch.rand(n_envs, device=device) * (height_max - height_min) + height_min
+    
+    # Compute XY positions on circle
+    # x = target_x + radius * cos(theta)
+    # y = target_y + radius * sin(theta)
+    positions = torch.zeros(n_envs, 3, device=device)
+    positions[:, 0] = target_position[0] + radius * torch.cos(theta)
+    positions[:, 1] = target_position[1] + radius * torch.sin(theta)
+    positions[:, 2] = height
+    
+    # Compute yaw to face target
+    # yaw = atan2(target_y - drone_y, target_x - drone_x)
+    # This makes the drone's forward direction (camera) point at the tank
+    dx = target_position[0] - positions[:, 0]
+    dy = target_position[1] - positions[:, 1]
+    yaw_angles = torch.atan2(dy, dx)
+    
+    return positions, yaw_angles
+
+
+def yaw_to_quaternion(yaw: torch.Tensor) -> torch.Tensor:
+    """
+    Convert yaw angles to quaternions (w, x, y, z format).
+    
+    Args:
+        yaw: Yaw angles in radians [n_envs]
+        
+    Returns:
+        quaternions: [n_envs, 4] in (w, x, y, z) format
+    """
+    n = yaw.shape[0]
+    quat = torch.zeros(n, 4, device=yaw.device)
+    
+    # Quaternion from yaw-only rotation (around Z axis)
+    half_yaw = yaw * 0.5
+    quat[:, 0] = torch.cos(half_yaw)  # w
+    quat[:, 1] = 0.0                   # x
+    quat[:, 2] = 0.0                   # y
+    quat[:, 3] = torch.sin(half_yaw)  # z
+    
+    return quat
 
 
 @register_env("DroneToTarget")
 class DroneToTargetTask(IsaacEnv):
     """
-    Navigate drone to randomly placed target position.
+    Navigate drone to tank target.
     
-    GPU-parallelized environment supporting 1000s of simultaneous environments.
+    Features:
+        - Tank loaded from USD file
+        - Drone spawns on circle around tank
+        - Drone always faces tank (camera pointing at target)
+        - GPU-parallelized (1000s of environments)
     """
     
     def __init__(self, cfg, headless: bool):
@@ -57,58 +174,83 @@ class DroneToTargetTask(IsaacEnv):
             cfg: Hydra configuration
             headless: Whether to run without GUI
         """
-        self.target_threshold = cfg.task.target.get("distance_threshold", 0.5)
-        self.max_distance = cfg.task.target.get("max_distance", 10.0)
-        self.height_range = cfg.task.target.get("height_range", [1.0, 3.0])
-        self.randomize_target = cfg.task.target.get("randomize", True)
+        # Spawn configuration
+        spawn_cfg = cfg.task.get("spawn", {})
+        self.spawn_radius_min = spawn_cfg.get("radius_min", 8.0)
+        self.spawn_radius_max = spawn_cfg.get("radius_max", 15.0)
+        self.spawn_height_min = spawn_cfg.get("height_min", 2.0)
+        self.spawn_height_max = spawn_cfg.get("height_max", 5.0)
+        self.face_target = spawn_cfg.get("face_target", True)
         
-        # Reward scales
-        self.reward_cfg = cfg.task.reward
+        # Target (tank) configuration
+        target_cfg = cfg.task.get("target", {})
+        self.target_usd_path = target_cfg.get("usd_path", "scenes/training_scene_simple.usd")
+        self.target_prim_path = target_cfg.get("prim_path", "/World/SM_Tank_T72b")
+        self.target_position_cfg = target_cfg.get("position", [0.0, 0.0, 0.0])
+        
+        # Reward configuration
+        self.reward_cfg = cfg.task.get("reward", {})
+        
+        # Success threshold
+        self.target_threshold = target_cfg.get("distance_threshold", 0.5)
+        self.max_distance = spawn_cfg.get("radius_max", 15.0) * 2
         
         super().__init__(cfg, headless)
         
-        # Previous distance for progress calculation
+        # Target position tensor
+        self.target_position = torch.tensor(
+            self.target_position_cfg, device=self.device
+        )
+        
+        # Tracking variables
         self.prev_distance = torch.zeros(self.num_envs, device=self.device)
+        self.episode_length = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.episode_return = torch.zeros(self.num_envs, device=self.device)
+        self.success = torch.zeros(self.num_envs, device=self.device)
         
     def _design_scene(self):
         """
         Design the simulation scene.
         
-        Spawns:
+        Loads:
             - Ground plane
-            - Drone (Iris quadrotor by default)
-            - Target marker (visual only)
+            - Tank from USD file (target)
+            - Drone (Iris quadrotor)
         """
         import omni.isaac.core.utils.prims as prim_utils
-        from pxr import UsdGeom, Gf
+        from omni.isaac.core.utils.stage import add_reference_to_stage
         
-        # Spawn ground plane
+        # Add ground plane
         prim_utils.create_prim("/World/ground", "Plane")
         
-        # Spawn drone
+        # Load tank from USD file
+        if self.target_usd_path:
+            print(f"[DroneToTarget] Loading tank from: {self.target_usd_path}")
+            add_reference_to_stage(
+                usd_path=self.target_usd_path,
+                prim_path="/World/Tank"
+            )
+        
+        # Create drone - OmniDrones provides various drone models
+        # The Iris model is a standard quadrotor used in PX4 SITL
         self.drone = MultirotorBase(
             name="drone",
             drone_model=self.cfg.task.drone.get("model", "Iris"),
-            spawn_pos=torch.tensor([0.0, 0.0, 1.5], device=self.device).expand(self.num_envs, 3),
         )
         
-        # Create visual target markers
-        for i in range(min(self.num_envs, 10)):  # Only visual for first 10 envs
-            sphere_path = f"/World/env_{i}/target_sphere"
-            sphere = UsdGeom.Sphere.Define(self._stage, sphere_path)
-            sphere.GetRadiusAttr().Set(0.1)
-            sphere.GetDisplayColorAttr().Set([(1.0, 0.0, 0.0)])  # Red
+        print(f"[DroneToTarget] Scene ready:")
+        print(f"  - Tank at: {self.target_position_cfg}")
+        print(f"  - Spawn radius: {self.spawn_radius_min}-{self.spawn_radius_max}m")
+        print(f"  - Spawn height: {self.spawn_height_min}-{self.spawn_height_max}m")
     
     def _set_specs(self):
-        """
-        Define observation and action specifications.
-        """
+        """Define observation and action specifications."""
         obs_dim = 13  # pos(3) + vel(3) + ang_vel(3) + rel_target(3) + dist(1)
         
         self.observation_spec = CompositeSpec({
             "agents": CompositeSpec({
                 "observation": UnboundedContinuousTensorSpec(
-                    shape=(self.num_envs, 1, obs_dim),  # (env, agent, obs)
+                    shape=(self.num_envs, 1, obs_dim),
                     device=self.device
                 ),
             }),
@@ -119,25 +261,23 @@ class DroneToTargetTask(IsaacEnv):
             }),
         })
         
-        # Action space: velocity commands [vx, vy, vz]
-        action_dim = 3
-        max_vel = self.cfg.task.action.get("max_velocity", [2.0, 2.0, 1.0])
+        # Action: velocity commands [vx, vy, vz]
+        action_cfg = self.cfg.task.get("action", {})
+        max_vel = action_cfg.get("max_velocity", [2.0, 2.0, 1.0])
         
         self.action_spec = BoundedTensorSpec(
             low=torch.tensor([-max_vel[0], -max_vel[1], -max_vel[2]]),
             high=torch.tensor([max_vel[0], max_vel[1], max_vel[2]]),
-            shape=(self.num_envs, 1, action_dim),
+            shape=(self.num_envs, 1, 3),
             device=self.device
         )
         
         self.reward_spec = UnboundedContinuousTensorSpec(
-            shape=(self.num_envs, 1),
-            device=self.device
+            shape=(self.num_envs, 1), device=self.device
         )
         
         self.done_spec = BoundedTensorSpec(
-            low=0,
-            high=1,
+            low=0, high=1,
             shape=(self.num_envs, 1),
             dtype=torch.bool,
             device=self.device
@@ -145,88 +285,71 @@ class DroneToTargetTask(IsaacEnv):
     
     def _reset_idx(self, env_ids: torch.Tensor):
         """
-        Reset specified environments.
+        Reset specified environments with circular spawn.
         
-        Args:
-            env_ids: Tensor of environment indices to reset
+        The drone spawns on a random position on a circle around the tank,
+        with its camera facing the tank.
         """
         n = len(env_ids)
         
-        # Reset drone position
-        spawn_pos = torch.zeros(n, 3, device=self.device)
-        spawn_pos[:, 2] = self.cfg.task.drone.get("spawn_pos", [0, 0, 1.5])[2]
-        self.drone.set_world_poses(spawn_pos, env_ids=env_ids)
+        # Compute spawn positions on circle around tank
+        positions, yaw_angles = compute_circular_spawn_position(
+            n_envs=n,
+            target_position=self.target_position,
+            radius_min=self.spawn_radius_min,
+            radius_max=self.spawn_radius_max,
+            height_min=self.spawn_height_min,
+            height_max=self.spawn_height_max,
+            device=self.device
+        )
         
-        # Reset drone velocity
+        # Convert yaw to quaternion for orientation
+        if self.face_target:
+            orientations = yaw_to_quaternion(yaw_angles)
+        else:
+            # Random orientation
+            orientations = torch.zeros(n, 4, device=self.device)
+            orientations[:, 0] = 1.0  # Identity quaternion
+        
+        # Set drone poses
+        self.drone.set_world_poses(positions, orientations, env_ids=env_ids)
+        
+        # Reset velocities
         zeros = torch.zeros(n, 3, device=self.device)
         self.drone.set_velocities(zeros, zeros, env_ids=env_ids)
         
-        # Randomize target positions
-        if self.randomize_target:
-            self.target_positions[env_ids, 0] = torch.rand(n, device=self.device) * 8.0 - 4.0
-            self.target_positions[env_ids, 1] = torch.rand(n, device=self.device) * 8.0 - 4.0
-            self.target_positions[env_ids, 2] = torch.rand(n, device=self.device) * (
-                self.height_range[1] - self.height_range[0]
-            ) + self.height_range[0]
-        
-        # Reset tracking variables
+        # Reset tracking
         self.prev_distance[env_ids] = self._compute_distance(env_ids)
         self.episode_length[env_ids] = 0
         self.episode_return[env_ids] = 0
         self.success[env_ids] = 0
     
     def _pre_sim_step(self, tensordict: TensorDict):
-        """
-        Apply actions before simulation step.
-        
-        Args:
-            tensordict: TensorDict containing action
-        """
-        # Get velocity commands
-        actions = tensordict["agents"]["action"].squeeze(1)  # (num_envs, 3)
-        
-        # Apply velocity controller
+        """Apply velocity commands before physics step."""
+        actions = tensordict["agents"]["action"].squeeze(1)
         self.drone.apply_velocity_commands(actions)
     
     def _compute_distance(self, env_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Compute distance from drone to target."""
         if env_ids is None:
             drone_pos = self.drone.get_world_poses()[0]
-            target_pos = self.target_positions
         else:
             drone_pos = self.drone.get_world_poses()[0][env_ids]
-            target_pos = self.target_positions[env_ids]
         
-        return torch.norm(drone_pos - target_pos, dim=-1)
+        target = self.target_position.expand_as(drone_pos)
+        return torch.norm(drone_pos - target, dim=-1)
     
     def _get_observations(self) -> TensorDict:
-        """
-        Compute observations for all environments.
-        
-        Returns:
-            TensorDict with observation data
-        """
-        # Get drone state
+        """Get current observations."""
         drone_pos, drone_rot = self.drone.get_world_poses()
         drone_vel, drone_ang_vel = self.drone.get_velocities()
         
-        # Relative target position
-        relative_target = self.target_positions - drone_pos
-        
-        # Distance
+        relative_target = self.target_position - drone_pos
         distance = torch.norm(relative_target, dim=-1, keepdim=True)
         
-        # Concatenate observation
         obs = torch.cat([
-            drone_pos,           # (num_envs, 3)
-            drone_vel,           # (num_envs, 3)
-            drone_ang_vel,       # (num_envs, 3)
-            relative_target,     # (num_envs, 3)
-            distance,            # (num_envs, 1)
-        ], dim=-1)
-        
-        # Add agent dimension for MARL compatibility
-        obs = obs.unsqueeze(1)  # (num_envs, 1, obs_dim)
+            drone_pos, drone_vel, drone_ang_vel, relative_target, distance
+        ], dim=-1).unsqueeze(1)
         
         return TensorDict({
             "agents": TensorDict({
@@ -239,40 +362,29 @@ class DroneToTargetTask(IsaacEnv):
             }, batch_size=[self.num_envs]),
         }, batch_size=[self.num_envs])
     
-    def _compute_reward_and_done(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Compute reward and done flags.
-        
-        Returns:
-            Tuple of (reward, done) tensors
-        """
-        # Get current distance
+    def _compute_reward_and_done(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute reward and termination."""
         distance = self._compute_distance()
         
-        # Distance penalty
-        reward = self.reward_cfg.distance_scale * distance
-        
-        # Progress reward
-        progress = self.prev_distance - distance
-        reward += self.reward_cfg.progress_scale * progress
-        
-        # Alive bonus
+        # Reward components
+        reward = self.reward_cfg.get("distance_scale", -1.0) * distance
+        reward += self.reward_cfg.get("progress_scale", 20.0) * (self.prev_distance - distance)
         reward += self.reward_cfg.get("alive_bonus", 0.1)
         
-        # Check success
+        # Success
         success = distance < self.target_threshold
-        reward += success.float() * self.reward_cfg.success_bonus
+        reward += success.float() * self.reward_cfg.get("success_bonus", 100.0)
         
-        # Check crash (ground collision)
+        # Crash
         drone_pos = self.drone.get_world_poses()[0]
         crashed = drone_pos[:, 2] < 0.1
-        reward += crashed.float() * self.reward_cfg.crash_penalty
+        reward += crashed.float() * self.reward_cfg.get("crash_penalty", -50.0)
         
-        # Check too far
+        # Too far
         too_far = distance > self.max_distance
-        reward += too_far.float() * self.reward_cfg.crash_penalty
+        reward += too_far.float() * self.reward_cfg.get("crash_penalty", -50.0)
         
-        # Done conditions
+        # Done
         done = success | crashed | too_far | (self.episode_length >= self.max_episode_length)
         
         # Update tracking
@@ -280,24 +392,11 @@ class DroneToTargetTask(IsaacEnv):
         self.episode_return += reward
         self.success = success.float()
         
-        # Add agent dimension
-        reward = reward.unsqueeze(-1)
-        done = done.unsqueeze(-1)
-        
-        return reward, done
+        return reward.unsqueeze(-1), done.unsqueeze(-1)
     
     def _post_sim_step(self, tensordict: TensorDict) -> TensorDict:
-        """
-        Process after simulation step.
-        
-        Args:
-            tensordict: Input TensorDict
-            
-        Returns:
-            Updated TensorDict with observations, rewards, done
-        """
+        """Process after simulation step."""
         self.episode_length += 1
-        
         reward, done = self._compute_reward_and_done()
         obs = self._get_observations()
         
@@ -306,9 +405,8 @@ class DroneToTargetTask(IsaacEnv):
             "reward": reward,
             "done": done,
         })
-        
         return tensordict
 
 
-# Alias for registration
+# Alias
 DroneToTarget = DroneToTargetTask
